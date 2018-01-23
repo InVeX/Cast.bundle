@@ -2,7 +2,8 @@
 from uuid import UUID
 
 import six
-from zeroconf import ServiceBrowser, Zeroconf
+import time
+from zeroconf import ServiceBrowser, Zeroconf, BadTypeInNameException
 import logging
 
 
@@ -42,8 +43,6 @@ class CastListener(object):
             try:
                 service = zconf.get_service_info(typ, name)
             except IOError:
-                # If the zerconf fails to receive the necesarry data we abort
-                # adding the service
                 break
             tries += 1
 
@@ -101,20 +100,30 @@ def stop_discovery(browser):
 
 def discover_chromecasts(max_devices=None, timeout=DISCOVER_TIMEOUT):
     """ Discover chromecasts on the network. """
-    from threading import Event
+    browser = None
+    zconf = None
     try:
-        # pylint: disable=unused-argument
-        def callback(name):
-            """Called when zeroconf has discovered a new chromecast."""
-            if max_devices is not None and listener.count >= max_devices:
-                discover_complete.set()
+        zconf = Zeroconf()
+        listener = CastListener()
+        browser = ServiceBrowser(zconf, "_googlecast._tcp.local.", listener)
 
-        discover_complete = Event()
-        listener, browser = start_discovery(callback)
+        if max_devices is None:
+            time.sleep(timeout)
+            return listener.devices
 
-        # Wait for the timeout or the maximum number of devices
-        discover_complete.wait(timeout)
+        else:
+            start = time.time()
 
-        return listener.devices
+            while (time.time() - start < timeout and
+                   listener.count < max_devices):
+                time.sleep(.1)
+
+            return listener.devices
+    except Exception as e:
+        log.debug("Caught an error: " + e.message)
+
     finally:
-        stop_discovery(browser)
+        if browser:
+            browser.cancel()
+        if zconf:
+            zconf.close()
